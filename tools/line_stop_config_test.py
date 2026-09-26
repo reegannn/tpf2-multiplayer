@@ -23,7 +23,9 @@ checks:
     python tools/line_stop_config_test.py
 """
 import os
+import re
 import sys
+import tempfile
 
 import lupa.lua52 as lupa
 
@@ -45,6 +47,7 @@ def runtime():
     g.package.path = (os.path.join(REPO, "mod/mp_lockstep_1/res/scripts/?.lua").replace("\\", "/")
                       + ";" + g.package.path)
     g.LINES_SRC = open(os.path.join(MP, "lines.lua"), encoding="utf-8").read()
+    g.BASE = tempfile.mkdtemp().replace("\\", "/") + "/"
     return L.execute(r'''
 local logs, sent = {}, {}
 local function sink()
@@ -144,7 +147,14 @@ api.engine = setmetatable({
 }, { __index = function() return sink() end })
 api.res = { modelRep = { getName = function() return "wp.mdl" end } }
 api.cmd = {
-  make = { updateLine = function(lid, line) return { what = "updateLine", lid = lid, line = line } end },
+  -- the slice's hook runs INSIDE this call and reads lockstep_lcfg_<x>.txt then:
+  -- record what the file holds at that moment, as the slice would see it
+  make = { updateLine = function(lid, line)
+    local f = io.open(BASE .. "lockstep_lcfg_b.txt", "r")
+    local handed = f and f:read("*a") or ""
+    if f then f:close() end
+    return { what = "updateLine", lid = lid, line = line, handed = handed }
+  end },
   sendCommand = function(cmd, cb) sent[#sent + 1] = cmd; if cb then cb(nil, true) end end,
 }
 game = setmetatable({ interface = {
@@ -156,7 +166,7 @@ game = setmetatable({ interface = {
   end,
 } }, { __index = function() return sink() end })
 
-local K = setmetatable({ INSTANCE = "b", PEER = "a", BASE = "",
+local K = setmetatable({ INSTANCE = "b", PEER = "a", BASE = BASE,
                          STRICT_OPS = { LCREATE = true, LUPDATE = true, LDELETE = true } },
   { __index = function() return nil end })
 local CM = { peerSeen = true, ticks = 0, seqNo = 0, queue = {}, peers = {} }
@@ -209,6 +219,13 @@ end
 function H.sigEqual(a, b) return CM.stopsSigEqual(a, b) end
 function H.logs() return table.concat(logs, "\n") end
 function H.crashes() return CRASHED end
+function H.handed() local c = sent[1]; return c and c.handed end
+function H.fileAfter()
+  local f = io.open(BASE .. "lockstep_lcfg_b.txt", "r")
+  local t = f and f:read("*a") or "(no file)"
+  if f then f:close() end
+  return t
+end
 return H
 ''')
 
@@ -237,8 +254,17 @@ def main():
     check("replay: the numeric fields still read (terminal, maxWaitingTime)",
           H.sentField(2, "terminal") == 1 and H.sentField(1, "maxWaitingTime") == 180,
           f"{H.sentField(2, 'terminal')} {H.sentField(1, 'maxWaitingTime')}")
-    check("replay: the unwritable flags are logged, never hidden", "not written: load (did not read back), unload (did not read back)" in H.logs(), H.logs()[-400:])
+    check("replay: the log says maxLoad was set here and the flags go to the slice", "maxLoad in place here, load/unload by the slice" in H.logs(), H.logs()[-400:])
+    check("replay: nothing refused", "not applied" not in H.logs(), H.logs()[-400:])
     check("replay: NO Lua list is ever assigned to a flag field (the game crashes on it)", H.crashes() == 0, str(H.crashes()))
+    handed = H.handed() or ""
+    check("replay: inside make.updateLine the slice finds the flags: line 42, 1 stop, stop 1 load 101 unload 010",
+          re.fullmatch(r"42 \d+ 1 1:101:010\n", handed) is not None, repr(handed))
+    check("replay: the handoff is blanked right after the call", H.fileAfter() == "", repr(H.fileAfter()))
+    H.replay(recs[0].split("@")[0] + "@::1/1/0.5;" + recs[1])
+    check("replay without flags (maxLoad only): the slice gets no request", (H.handed() or "") == "", repr(H.handed()))
+    H.replay(recs[0].split("@")[0] + ";" + recs[1])
+    check("replay without any filter: the slice gets no request", (H.handed() or "") == "", repr(H.handed()))
 
     # 2b. The filter from the first game test, exactly as the slice read it (17 cargo
     # types; load and unload set, maxLoad left empty by the game).

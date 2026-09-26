@@ -582,6 +582,7 @@ enum VecRead { VEC_UNREADABLE, VEC_EMPTY, VEC_OK };
 #include "slice/station_weld.inl"   // MergeTemplateStreet: a script-built station proposal shaped like the UI's (station_weld.h)
 #include "slice/terrain_assets.inl"   // terrain tools and the asset brush: stash at the factory, inject from the Lua's file
 #include "slice/add_hook.inl"   // the CommandList::Add hook: cancel, callbacks, stashes, DeferHandler
+#include "slice/stopflags.inl"   // a replayed stop's cargo flags written into the command's Line (the script cannot)
 #include "slice/trainorder.inl"   // TRAIN RESERVATION ORDER (trainorder.h)
 #include "slice/roadspace.inl"   // near-page detours, ROAD FREE SPACE and road entry order
 #include "slice/sharedstations.inl"   // SHARED STATIONS: the line editor's owner gate in companies mode

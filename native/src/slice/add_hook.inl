@@ -54,6 +54,32 @@ static void* GameNew16()
     } __except (EXCEPTION_EXECUTE_HANDLER) { p = nullptr; }
     return p;
 }
+// Any number of bytes from the same checked allocator (the game's own operator
+// new), for memory the game frees itself: slice/stopflags.inl builds the bit buffer
+// of a replayed stop's cargo flags with it, and the game's std::allocator releases it
+// through its operator delete like any buffer of its own. Below 4096 bytes MSVC's
+// allocator takes plain operator new (no alignment header), so callers stay under it.
+// nullptr when the allocator is not build 35924's, the size is out of range or it fails.
+static void* GameNewBytes(size_t n)
+{
+    if (n == 0 || n >= 4096) return nullptr;
+    static volatile LONG checked = 0;   // 0 unknown, 1 usable, 2 refused
+    typedef void* (__fastcall* NewFn)(size_t);
+    const uintptr_t fn = g_base + RVA_OPERATOR_NEW;
+    LONG state = InterlockedCompareExchange(&checked, 0, 0);
+    if (!state) {
+        state = (g_base && Readable((const void*)fn, sizeof OPERATOR_NEW_BYTES) &&
+                 memcmp((const void*)fn, OPERATOR_NEW_BYTES, sizeof OPERATOR_NEW_BYTES) == 0) ? 1 : 2;
+        InterlockedExchange(&checked, state);
+        if (state == 2) Log("[stopflags] operator new at %llx is not build 35924's -- cargo flags are not written\n",
+                            (unsigned long long)RVA_OPERATOR_NEW);
+    }
+    if (state != 1) return nullptr;
+    void* p = nullptr;
+    __try { p = ((NewFn)fn)(n); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { p = nullptr; }
+    return p;
+}
 static void ZeroAddResult(uint64_t rdx)
 {
     if (!rdx) return;

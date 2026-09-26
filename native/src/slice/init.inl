@@ -120,6 +120,7 @@ static DWORD WINAPI Init(LPVOID)
     Log("[slice] attached, base=%llx instance=%s dumpprop=%d\n",
         (unsigned long long)g_base, g_instance[0] ? g_instance : "?",
         DumpPropOn() ? 1 : 0);
+    Log("[stopflags] ready: a replayed line stop's cargo flags are written into its command here (stopflags.inl, cargo-filter build 2026-09-27)\n");
 
     uint8_t* blobs = (uint8_t*)VirtualAlloc(nullptr, 4096,
         MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);

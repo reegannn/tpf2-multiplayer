@@ -179,56 +179,45 @@ return function(CM)
         return n
     end
 
-    -- set a new api.type.Line.Stop's config from its wire record. The flags go in
-    -- as the integers 1 and 0, as the API documents them ({int,...}), although the
-    -- engine keeps them as bits: its setter refuses anything but an integer, a
-    -- boolean included ("stack index 3, expected number, received boolean: not an
-    -- integer", 2026-09-26 in a game -- every filter was dropped at the replay).
+    -- The load/unload flags of a wire record as the slice's handoff token
+    -- "<stop>:<load>:<unload>" ("-" for none), or nil when the stop has neither.
+    -- The script cannot write them (below); the slice does, into the replayed
+    -- command's Line (slice/stopflags.inl, lockstep_lcfg_<x>.txt).
+    function CM.lineFlagsToken(stopIndex, record)
+        local head = tostring(record):match("^[^~]*")
+        local enc = head:match("@(.*)$")
+        if not enc then return nil end
+        local l, u = enc:match("^([01]*):([01]*):")
+        if not l or (l == "" and u == "") then return nil end
+        return string.format("%d:%s:%s", stopIndex, l ~= "" and l or "-", u ~= "" and u or "-")
+    end
+
+    -- set a new api.type.Line.Stop's maxLoad from its wire record, in place, checked
+    -- by reading back. The load/unload flags are NOT written here, and no Lua list is
+    -- ever assigned to a stopConfig field:
+    --   * written in place they are lost -- the engine keeps them as bits and the
+    --     script is handed a copy (third game test, 2026-09-26);
+    --   * a Lua list assigned to one crashes the game -- its setter reads the list as
+    --     its own type through a null pointer (build 7: access violation reading 0 at
+    --     exe+0x154ea2c the moment a filter replayed).
+    -- buildLineObject hands them to the slice instead (CM.lineFlagsToken).
     function CM.lineApplyStopConfig(stop, record)
         local cfg = CM.lineReadStopConfig(record)
         if not cfg then return false end
+        if #cfg.maxLoad == 0 then return true, "no maxLoad" end
         local sc = stop.stopConfig
         if not sc then error("the stop has no stopConfig") end
-        -- does sc[field] now read back as vals?
-        local function holds(field, vals, isFlag)
-            local ok, same = pcall(function()
-                local vec = sc[field]
-                if #vec ~= #vals then return false end
-                for i = 1, #vals do
-                    if isFlag then
-                        if (flag(vec[i]) and 1 or 0) ~= vals[i] then return false end
-                    else
-                        local x = tonumber(vec[i])
-                        if not x or math.abs(x - vals[i]) > 1e-6 then return false end
-                    end
-                end
-                return true
-            end)
-            return ok and same
-        end
-        -- In place, and checked by reading back. NEVER assign a Lua list to one of
-        -- these fields: the engine's setter takes it unchecked, as its own type, and
-        -- reads through a null pointer -- the game died on it (2026-09-26, build 7,
-        -- access violation reading 0 at exe+0x154ea2c the moment a filter replayed).
-        -- In place, maxLoad is kept; load and unload are bits in the engine and the
-        -- script is handed a copy of them, so their entries are lost. That is logged
-        -- ("not written"): the flags have no safe route from the script.
-        local how, failed = {}, {}
-        local function set(field, vals, isFlag)
-            if #vals == 0 then return end   -- none shipped: the new stop's default stays
-            local ok, err = pcall(function()
-                local vec = sc[field]
-                for i, v in ipairs(vals) do vec[i] = v end
-                sc[field] = vec
-            end)
-            if ok and holds(field, vals, isFlag) then how[#how + 1] = field .. " in place"; return end
-            failed[#failed + 1] = field .. (ok and " (did not read back)" or (" (" .. tostring(err) .. ")"))
-        end
-        set("load", cfg.load, true)
-        set("unload", cfg.unload, true)
-        set("maxLoad", cfg.maxLoad, false)
+        local vec = sc.maxLoad
+        if not vec then error("stopConfig has no maxLoad") end
+        for i, v in ipairs(cfg.maxLoad) do vec[i] = v end
+        sc.maxLoad = vec
         stop.stopConfig = sc
-        if #failed > 0 then error("not written: " .. table.concat(failed, ", ")) end
-        return true, table.concat(how, ", ")
+        local back = stop.stopConfig.maxLoad
+        if #back ~= #cfg.maxLoad then error("maxLoad did not read back (" .. #back .. " of " .. #cfg.maxLoad .. " entries)") end
+        for i = 1, #cfg.maxLoad do
+            local x = tonumber(back[i])
+            if not x or math.abs(x - cfg.maxLoad[i]) > 1e-6 then error("maxLoad[" .. i .. "] did not read back") end
+        end
+        return true, "maxLoad in place"
     end
 end

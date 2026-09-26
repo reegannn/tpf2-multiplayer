@@ -524,6 +524,27 @@ function CM.lineAssignRequest(lid, c)
 	end)
 	return ok
 end
+-- A replay's cargo flags for the slice (slice/stopflags.inl): written right before
+-- api.cmd.make.updateLine, read by the slice inside that call, blanked after it --
+-- the same handoff as lockstep_lassign. flags: buildLineObject's "<stop>:<load>:<unload>"
+-- tokens. The seq is fresh per request, so a stale file never applies twice.
+function CM.lineFlagsRequest(lid, flags)
+	if not flags or #flags == 0 then return false end
+	CM.lcfgSeq = (CM.lcfgSeq or (os.time() % 100000000) * 10) + 1
+	local ok = false
+	pcall(function()
+		local f = io.open(K.BASE .. "lockstep_lcfg_" .. K.INSTANCE .. ".txt", "w")
+		if f then f:write(string.format("%d %d %d %s\n", lid, CM.lcfgSeq, #flags, table.concat(flags, " "))); f:close(); ok = true end
+	end)
+	if not ok then log(string.format("line %s: cargo flags could not be handed to the slice (file not written) -- they are lost here", tostring(lid))) end
+	return ok
+end
+function CM.lineFlagsDone()
+	pcall(function()
+		local f = io.open(K.BASE .. "lockstep_lcfg_" .. K.INSTANCE .. ".txt", "w")
+		if f then f:close() end
+	end)
+end
 function CM.lineAssignDone()
 	pcall(function()
 		local f = io.open(K.BASE .. "lockstep_lassign_" .. K.INSTANCE .. ".txt", "w")
@@ -757,6 +778,7 @@ local function buildLineObject(c)
 	lineObj.waitingTime = CM.waitNum(c.wait, 180)
 	local n = 0
 	local groups = {}   -- the station group of every stop, for the permission check
+	local flags = {}    -- the stops' cargo flags for the slice (CM.lineFlagsRequest)
 	local altList = nil
 	if c.alts and c.alts ~= "" then
 		altList = {}
@@ -798,7 +820,7 @@ local function buildLineObject(c)
 		s.maxWaitingTime = f[7]
 		local okC, errC, howC = pcall(CM.lineApplyStopConfig, s, rec)
 		if not okC then log(string.format("line: stop %d cargo settings not applied: %s", #groups, tostring(errC)))
-		elseif errC then log(string.format("line: stop %d cargo filter set (%s) -- written %s", #groups, tostring(select(2, CM.splitStopRecord(rec))), tostring(howC))) end
+		elseif errC then log(string.format("line: stop %d cargo filter (%s): %s here, load/unload by the slice", #groups, tostring(select(2, CM.splitStopRecord(rec))), tostring(howC))) end
 		local wp = CM.lineReadWaypoints(rec)
 		if #wp > 0 then
 			local target = s.waypoints
@@ -822,6 +844,8 @@ local function buildLineObject(c)
 			if not okA then log(string.format("line: stop %d alternative terminals not applied: %s", n, tostring(errA))) end
 		end
 		lineObj.stops[n] = s
+		local tok = CM.lineFlagsToken and CM.lineFlagsToken(n, rec)
+		if tok then flags[#flags + 1] = tok end
 		-- DIAGNOSTIC (2026-09-26: a filter set here did not stick): what the Line
 		-- the command is built from holds for this stop, read back through the API
 		if okC and errC then
@@ -830,20 +854,22 @@ local function buildLineObject(c)
 				okR and (held ~= "" and held or "(none -- the setting was lost)") or ("unreadable: " .. tostring(held))))
 		end
 	end
-	return lineObj, n, groups
+	return lineObj, n, groups, flags
 end
 
 -- the click, applied here now (c: key, wait, stops, alts); the history and the
 -- sent-list bookkeeping as execLine's own apply would keep them
 function CM.lineApplyNow(lid, c)
-	local lineObj, n = buildLineObject(c)
+	local lineObj, n, _, flags = buildLineObject(c)
 	pcall(function()
 		local pre = CM.lineSnapshot(lid)
 		if pre and pre.stops then CM.lineHistNote(c.key, pre.stops, pre.alts) end
 		CM.lineHistNote(c.key, c.stops or "", c.alts or "")
 	end)
 	local asked = CM.lineAssignRequest(lid, c)
+	local handed = CM.lineFlagsRequest(lid, flags)
 	local cmd = api.cmd.make.updateLine(lid, lineObj)
+	if handed then CM.lineFlagsDone() end
 	if asked then CM.lineAssignDone() end
 	api.cmd.sendCommand(cmd, function(res, success)
 		log(string.format("LUPDATE %s: applied here at once (no vehicles) stops=%d success=%s%s", tostring(c.key), n, tostring(success),
@@ -915,7 +941,7 @@ function CM.execLine(c)
 			local key = tostring(c.origin) .. ":" .. tostring(c.seq)
 			local lid = CM.lineIdFor(key) or CM.lineIdFor(tostring(c.spare))
 			if not lid then c.key = c.key or c.spare; retryLineDep(c); return end
-			local lineObj, n, groups = buildLineObject(c)
+			local lineObj, n, groups, flags = buildLineObject(c)
 			if not permitted(lineObj, groups) then return end
 			local pid = playerForOrigin(c)
 			local okO, errO = pcall(CM.cmSetPlayer, lid, pid)
@@ -929,7 +955,10 @@ function CM.execLine(c)
 				api.cmd.sendCommand(api.cmd.make.setColor(lid, api.type.Vec3f.new(r, g, b)), function() end)
 			end)
 			if n > 0 or math.abs(CM.waitNum(c.wait, 180) - 180) > 1e-6 then
-				api.cmd.sendCommand(api.cmd.make.updateLine(lid, lineObj), function(res, success)
+				local handed = CM.lineFlagsRequest(lid, flags)
+				local cmd = api.cmd.make.updateLine(lid, lineObj)
+				if handed then CM.lineFlagsDone() end
+				api.cmd.sendCommand(cmd, function(res, success)
 					log(string.format("EXEC LCREATE seq=%s: the claimed spare's stops applied success=%s", tostring(c.seq), tostring(success)))
 				end)
 			end
@@ -939,8 +968,11 @@ function CM.execLine(c)
 			return
 		end
 		if c.op == "LCREATE" then
-			local lineObj, n, groups = buildLineObject(c)
+			local lineObj, n, groups, flags = buildLineObject(c)
 			if not permitted(lineObj, groups) then return end
+			if #flags > 0 then
+				log(string.format("LCREATE seq=%s: %d stop(s) carry cargo flags, which a created line does not take (only an update does) -- set them again after", tostring(c.seq), #flags))
+			end
 			local r, g, b = tostring(c.color or ""):match("^([^,]+),([^,]+),([^,]+)$")
 			local color = api.type.Vec3f.new(tonumber(r) or 0.9, tonumber(g) or 0.2, tonumber(b) or 0.2)
 			local name = CM.unescName(c.name)
@@ -976,7 +1008,7 @@ function CM.execLine(c)
 		elseif c.op == "LUPDATE" then
 			local lid = CM.lineIdFor(c.key)
 			if not lid then retryLineDep(c); return end
-			local lineObj, n, groups = buildLineObject(c)
+			local lineObj, n, groups, flags = buildLineObject(c)
 			if not permitted(lineObj, groups) then
 				if c.origin == K.INSTANCE then CM.lineSentDone(c.key, c.stops) end
 				return
@@ -989,7 +1021,9 @@ function CM.execLine(c)
 			end)
 			local sentTick = CM.ticks
 			local asked = CM.lineAssignRequest(lid, c)
+			local handed = CM.lineFlagsRequest(lid, flags)
 			local cmd = api.cmd.make.updateLine(lid, lineObj)
+			if handed then CM.lineFlagsDone() end
 			if asked then CM.lineAssignDone() end
 			api.cmd.sendCommand(cmd, function(res, success)
 				log(string.format("EXEC LUPDATE seq=%s origin=%s at=%s %s stops=%d success=%s step=%d +%d ticks%s",

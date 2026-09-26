@@ -274,6 +274,8 @@ static void CaptureCalendar(uint64_t id, uint64_t rcx, uint64_t rdx, uint64_t ca
         what, value, (unsigned long long)caller);
 }
 
+static void ApplyStopFlagsAtReplay(int32_t entity, uint64_t line);   // slice/stopflags.inl
+
 static void CaptureFactory(const Factory& f, uint64_t rcx, uint64_t rdx, uint64_t r8,
                            uint64_t r9, uint64_t calleeRsp, uint64_t caller, bool cancel)
 {
@@ -312,6 +314,8 @@ static void CaptureFactory(const Factory& f, uint64_t rcx, uint64_t rdx, uint64_
                 // the platform assignment the click ran, re-run here on the rebuilt list (LINE PLATFORM ASSIGNMENT AT REPLAY)
                 __try { ApplyLineAssignAtReplay(rdx, (int32_t)r8, r9); }
                 __except (EXCEPTION_EXECUTE_HANDLER) { Log("[lineassign] LUPDATE replay: fault in the assignment -- the list is applied as shipped\n"); }
+                // the stops' cargo flags the Lua handed over (lockstep_lcfg), into this Line
+                ApplyStopFlagsAtReplay((int32_t)r8, r9);
                 // DIAGNOSTIC (read-only): the cargo filters this replay's Line really carries,
                 // as the engine will get it. A filter the Lua set that is missing here never
                 // reached the command (2026-09-26: filters set by the replay did not stick).

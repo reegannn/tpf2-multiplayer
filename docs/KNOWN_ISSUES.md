@@ -96,8 +96,11 @@ something here is fixed, the release note says so and the entry goes.
   written load as ...`). *Then build 7 crashed the game* (access violation reading 0 at exe+0x154ea2c) the moment a
   filter replayed: the engine's setter for these fields takes a Lua list unchecked as its own type.
   Assigning a list was removed; the script writes in place only, which keeps `maxLoad` and cannot
-  keep the flags (logged as `not written`). The flags need the slice to write them into the
-  replayed command's Line with the game's own allocator -- not built yet. Also found in the first test: ticking several cargo types quickly (or while paused) kept only
+  keep the flags. *Now the slice writes them* (`slice/stopflags.inl`): the Lua hands each replay's
+  flags over in `lockstep_lcfg_<x>.txt` right before `make.updateLine`, and the factory hook writes
+  them into the command's Line (MSVC `vector<bool>`, buffer from the game's own operator new), then
+  reads them back (`[stopflags] ... written on N stop(s)`). **Windows only:** the native Linux slice
+  does not read the handoff, so a native-Linux player's replays keep no flags. Also found in the first test: ticking several cargo types quickly (or while paused) kept only
   the last tick. Each tick is its own line edit built from the line the engine holds, and the
   quick-edit merge took a stop whole; it now merges a stop part by part and a filter entry by
   entry (`tools/line_stop_config_clicks_test.py`). Like every edit, a filter shows only once
