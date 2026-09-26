@@ -88,7 +88,12 @@ something here is fixed, the release note says so and the entry goes.
   it, but every replay dropped it: the Lua wrote the flags as booleans and the engine's setter
   takes integers only (`cargo settings not applied: ... expected number, received boolean: not
   an integer` in stdout). The flags are written as 1/0 now, and the tests' stand-in vectors
-  refuse booleans the same way. Also found in the first test: ticking several cargo types quickly (or while paused) kept only
+  refuse booleans the same way. The third test's diagnostics then showed the integers written but still lost: reading `load` or
+  `unload` gives the script a copy (the engine keeps them as bits), so entries written into it,
+  and the copy assigned back, set nothing, while `maxLoad` written the same way was kept. Each
+  vector is now written one way after another (in place, a list of numbers, a list of booleans)
+  and read back until it holds the filter; the log says which way (`cargo filter set (...) --
+  written load as ...`). Also found in the first test: ticking several cargo types quickly (or while paused) kept only
   the last tick. Each tick is its own line edit built from the line the engine holds, and the
   quick-edit merge took a stop whole; it now merges a stop part by part and a filter entry by
   entry (`tools/line_stop_config_clicks_test.py`). Like every edit, a filter shows only once

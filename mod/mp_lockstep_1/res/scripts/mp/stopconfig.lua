@@ -189,16 +189,64 @@ return function(CM)
         if not cfg then return false end
         local sc = stop.stopConfig
         if not sc then error("the stop has no stopConfig") end
-        local function fill(field, vals)
-            local vec = sc[field]
-            if not vec then error("stopConfig has no " .. field) end
-            for i, v in ipairs(vals) do vec[i] = v end
-            sc[field] = vec
+        -- does sc[field] now read back as vals?
+        local function holds(field, vals, isFlag)
+            local ok, same = pcall(function()
+                local vec = sc[field]
+                if #vec ~= #vals then return false end
+                for i = 1, #vals do
+                    if isFlag then
+                        if (flag(vec[i]) and 1 or 0) ~= vals[i] then return false end
+                    else
+                        local x = tonumber(vec[i])
+                        if not x or math.abs(x - vals[i]) > 1e-6 then return false end
+                    end
+                end
+                return true
+            end)
+            return ok and same
         end
-        fill("load", cfg.load)
-        fill("unload", cfg.unload)
-        fill("maxLoad", cfg.maxLoad)
+        -- HOW a vector is written is checked, not assumed (2026-09-26, in a game):
+        -- writing maxLoad's entries in place kept them, but the same writes to load
+        -- and unload were silently lost -- the engine keeps those as bits, and the
+        -- script gets a copy of them. So each way is tried in turn and read back; the
+        -- first that reads back as the filter is kept. Every game runs the same
+        -- binding, so every game settles on the same way.
+        local how, failed = {}, {}
+        local function set(field, vals, isFlag)
+            if #vals == 0 then return end   -- none shipped: the new stop's default stays
+            local tries = {
+                { "in place", function()
+                    local vec = sc[field]
+                    for i, v in ipairs(vals) do vec[i] = v end
+                    sc[field] = vec
+                end },
+                { "as a list of numbers", function()
+                    local t = {}
+                    for i, v in ipairs(vals) do t[i] = v end
+                    sc[field] = t
+                end },
+            }
+            if isFlag then
+                tries[#tries + 1] = { "as a list of booleans", function()
+                    local t = {}
+                    for i, v in ipairs(vals) do t[i] = (v ~= 0) end
+                    sc[field] = t
+                end }
+            end
+            local tried = {}
+            for _, t in ipairs(tries) do
+                local ok, err = pcall(t[2])
+                if ok and holds(field, vals, isFlag) then how[#how + 1] = field .. " " .. t[1]; return end
+                tried[#tried + 1] = t[1] .. (ok and " (did not read back)" or (": " .. tostring(err)))
+            end
+            failed[#failed + 1] = field .. " (" .. table.concat(tried, "; ") .. ")"
+        end
+        set("load", cfg.load, true)
+        set("unload", cfg.unload, true)
+        set("maxLoad", cfg.maxLoad, false)
         stop.stopConfig = sc
-        return true
+        if #failed > 0 then error("not written: " .. table.concat(failed, ", ")) end
+        return true, table.concat(how, ", ")
     end
 end

@@ -81,14 +81,51 @@ local function engineVec(flags)
     __len = function() return #store end,
   })
 end
+-- A StopConfig as the game binds it, from the third game test's logs (2026-09-26):
+-- maxLoad is a real vector (entries written in place are kept), but load and unload
+-- are bits in the engine, so READING one hands the script a fresh copy each time:
+-- entries written into that copy are lost, and assigning the copy back sets
+-- nothing. Only a Lua list assigned to the field is taken. How the engine converts
+-- that list is not known, so it runs both ways (BINDING): "numbers" takes 1/0,
+-- "truthy" converts like a C++ bool, where every number, 0 included, is true.
+BINDING = "numbers"
+local function engineConfig()
+  local bits = { load = {}, unload = {} }
+  local maxLoad = engineVec(false)
+  return setmetatable({}, {
+    __index = function(_, k)
+      if k == "maxLoad" then return maxLoad end
+      local src = bits[k]
+      if not src then return nil end
+      local copy = engineVec(true)
+      for i = 1, #src do copy[i] = src[i] end
+      return copy
+    end,
+    __newindex = function(_, k, v)
+      if k == "maxLoad" then
+        if getmetatable(v) then maxLoad = v; return end
+        local t = engineVec(false); for i = 1, #v do t[i] = v[i] end; maxLoad = t; return
+      end
+      if not bits[k] then error("no field " .. tostring(k)) end
+      local out = {}
+      if not getmetatable(v) then
+        for i = 1, #v do
+          if BINDING == "truthy" then out[i] = v[i] and 1 or 0
+          elseif type(v[i]) == "number" then out[i] = (v[i] ~= 0) and 1 or 0
+          else error("stack index 3, expected number, received " .. type(v[i]) .. ": not an integer") end
+        end
+      end
+      bits[k] = out   -- a copy handed back sets nothing: the field comes out empty
+    end,
+  })
+end
 local CT = { LINE = 1, STATION_GROUP = 4, PLAYER_OWNED = 5, COLOR = 6, MODEL_INSTANCE_LIST = 7, SIGNAL_LIST = 8 }
 api = setmetatable({}, { __index = function() return sink() end })
 api.type = setmetatable({
   ComponentType = CT,
   Line = { new = function() return { stops = {} } end,
            Stop = { new = function() return { waypoints = {}, alternativeTerminals = {},
-                                              stopConfig = { load = engineVec(true), unload = engineVec(true),
-                                                             maxLoad = engineVec(false) } } end } },
+                                              stopConfig = engineConfig() } end } },
   StationTerminal = { new = function() return {} end },
   SignalId = { new = function() return {} end },
 }, { __index = function() return sink() end })
@@ -173,6 +210,7 @@ function H.merge(b, c, p)
 end
 function H.sigEqual(a, b) return CM.stopsSigEqual(a, b) end
 function H.logs() return table.concat(logs, "\n") end
+function H.setBinding(b) BINDING = b end
 return H
 ''')
 
@@ -202,6 +240,16 @@ def main():
           H.sentField(2, "terminal") == 1 and H.sentField(1, "maxWaitingTime") == 180,
           f"{H.sentField(2, 'terminal')} {H.sentField(1, 'maxWaitingTime')}")
     check("replay: nothing refused", "not applied" not in H.logs() and "REJECT" not in H.logs(), H.logs()[-400:])
+
+    # 2a. The game's binding, both ways it may convert a list: the ticks come out right.
+    for binding in ("numbers", "truthy"):
+        H.setBinding(binding)
+        H.replay(stops)
+        check(f"binding '{binding}': load ticks written exactly", H.sentVec(1, "load") == "number:1,number:0,number:1", str(H.sentVec(1, "load")))
+        check(f"binding '{binding}': unload ticks written exactly", H.sentVec(1, "unload") == "number:0,number:1,number:0", str(H.sentVec(1, "unload")))
+        check(f"binding '{binding}': maxLoad written exactly", H.sentVec(1, "maxLoad") == "number:1,number:1,number:0.5", str(H.sentVec(1, "maxLoad")))
+    check("the log says how each list was written", "written load as a list of" in H.logs(), H.logs()[-300:])
+    H.setBinding("numbers")
 
     # 2b. The filter from the first game test, exactly as the slice read it (17 cargo
     # types; load and unload set, maxLoad left empty by the game).

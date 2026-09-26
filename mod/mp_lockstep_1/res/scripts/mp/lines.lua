@@ -796,9 +796,9 @@ local function buildLineObject(c)
 		s.loadMode = f[5]
 		s.minWaitingTime = f[6]
 		s.maxWaitingTime = f[7]
-		local okC, errC = pcall(CM.lineApplyStopConfig, s, rec)
+		local okC, errC, howC = pcall(CM.lineApplyStopConfig, s, rec)
 		if not okC then log(string.format("line: stop %d cargo settings not applied: %s", #groups, tostring(errC)))
-		elseif errC then log(string.format("line: stop %d cargo filter set (%s)", #groups, tostring(select(2, CM.splitStopRecord(rec))))) end
+		elseif errC then log(string.format("line: stop %d cargo filter set (%s) -- written %s", #groups, tostring(select(2, CM.splitStopRecord(rec))), tostring(howC))) end
 		local wp = CM.lineReadWaypoints(rec)
 		if #wp > 0 then
 			local target = s.waypoints
