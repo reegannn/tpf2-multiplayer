@@ -312,6 +312,21 @@ static void CaptureFactory(const Factory& f, uint64_t rcx, uint64_t rdx, uint64_
                 // the platform assignment the click ran, re-run here on the rebuilt list (LINE PLATFORM ASSIGNMENT AT REPLAY)
                 __try { ApplyLineAssignAtReplay(rdx, (int32_t)r8, r9); }
                 __except (EXCEPTION_EXECUTE_HANDLER) { Log("[lineassign] LUPDATE replay: fault in the assignment -- the list is applied as shipped\n"); }
+                // DIAGNOSTIC (read-only): the cargo filters this replay's Line really carries,
+                // as the engine will get it. A filter the Lua set that is missing here never
+                // reached the command (2026-09-26: filters set by the replay did not stick).
+                __try {
+                    LineDecode& diag = g_lineReplayDiag;
+                    const bool ok = DecodeLine(r9, &diag);
+                    int nCfg = 0;
+                    if (ok) for (int i = 0; i < diag.n; i++) if (!diag.st[i].cfg.empty()) {
+                        nCfg++;
+                        Log("[slice] LUPDATE replay line=%d: stop %d carries cargo filter %.200s\n", (int)(int32_t)r8, i + 1, diag.st[i].cfg.c_str());
+                    }
+                    Log("[slice] LUPDATE replay line=%d: %s, %d stop(s) carry a cargo filter\n", (int)(int32_t)r8,
+                        ok ? "decoded" : "NOT decoded", ok ? nCfg : 0);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) { Log("[slice] LUPDATE replay: diagnostic decode faulted -- ignored\n"); }
             }
         } else {
             // UpdateLine: decode the Line FIRST. A cancel is only honest when

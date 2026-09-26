@@ -822,6 +822,13 @@ local function buildLineObject(c)
 			if not okA then log(string.format("line: stop %d alternative terminals not applied: %s", n, tostring(errA))) end
 		end
 		lineObj.stops[n] = s
+		-- DIAGNOSTIC (2026-09-26: a filter set here did not stick): what the Line
+		-- the command is built from holds for this stop, read back through the API
+		if okC and errC then
+			local okR, held = pcall(function() return CM.lineStopConfigSuffix(lineObj.stops[n]) end)
+			log(string.format("line: stop %d cargo filter in the command's Line: %s", n,
+				okR and (held ~= "" and held or "(none -- the setting was lost)") or ("unreadable: " .. tostring(held))))
+		end
 	end
 	return lineObj, n, groups
 end
@@ -989,6 +996,14 @@ function CM.execLine(c)
 					tostring(c.seq), tostring(c.origin), tostring(c.at), tostring(c.key), n, tostring(success),
 					CM.stepOf(CM.gameTime() or 0), (CM.ticks or 0) - sentTick, asked and " (platforms assigned at the stamp)" or ""))
 				if c.origin == K.INSTANCE then CM.lineSentDone(c.key, c.stops) end
+				-- DIAGNOSTIC (2026-09-26): the filters the engine's line holds once the update applied
+				if CM.lineStopConfigCount and CM.lineStopConfigCount(c.stops) > 0 then
+					pcall(function()
+						local now = CM.lineSnapshot(lid)
+						log(string.format("LUPDATE %s: the engine's line now holds cargo filters on %d stop(s)%s", tostring(c.key),
+							now and CM.lineStopConfigCount(now.stops) or -1, now and ("; stops=" .. tostring(now.stops)) or " (not read)"))
+					end)
+				end
 			end)
 		elseif c.op == "LDELETE" then
 			local lid = CM.lineIdFor(c.key)

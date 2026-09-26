@@ -57,6 +57,7 @@ static char g_lineDecodeWhy[200] = "";
 #define LINE_REFUSE(...) do { _snprintf_s(g_lineDecodeWhy, sizeof(g_lineDecodeWhy), _TRUNCATE, __VA_ARGS__); return false; } while (0)
 struct LineDecode { float wait; int n; std::vector<LineStop> st; };
 static LineDecode g_lineDecode;
+static LineDecode g_lineReplayDiag;   // capture.inl: what a Lua replay's Line carries (diagnostic)
 static bool       g_lineDecodeOk = false;
 
 static void WriteLineWaypoints(FILE* f, const LineDecode& d)
