@@ -197,7 +197,7 @@ Line::*, ..., float Line::*, ..., LineVehicleInfo Line::*>`.
 | +0x2c | minWaitingTime | float | "+0x2c or +0x30" | PROVEN: member pointer 0x2c, `float Stop::*`; copied with `movss` (`0xb8326c`/`0xb83286`) |
 | +0x30 | maxWaitingTime | float | "+0x2c or +0x30" | PROVEN: member pointer 0x30, `float Stop::*`; `movss` (`0xb8328b`/`0xb8329c`) |
 | +0x38 | waypoints | `std::vector<transport::SignalId>`, 8 B each | +0x38 | PROVEN: member pointer 0x38; shipped as the 0.5.3 `wp=` suffix |
-| +0x50 | stopConfig | `Line::StopConfig` (two bit vectors +0x50/+0x78, a vector +0xa0) | | PROVEN: member pointer 0x50; not shipped |
+| +0x50 | stopConfig | `Line::StopConfig` (two bit vectors +0x50/+0x78, a vector +0xa0) | +0x50/+0x70/+0x90 DERIVED (MSVC `vector<bool>` is 32 B; ends the 0xa8 stop exactly) | PROVEN: member pointer 0x50; API names `load`, `unload`, `maxLoad`; shipped as `sc=` (maxLoad read as float 0..1) |
 
 Stride 0xb8 (PROVEN, four independent sites):
 - `std::vector<Stop>` destructor `0xaa43f0` (called on the factories' local stops vectors,

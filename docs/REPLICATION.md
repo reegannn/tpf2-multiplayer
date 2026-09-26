@@ -148,7 +148,7 @@ retry targets do not repair differences in peers' route topology or engine resul
 |---|---|---|---|
 | add a station or waypoint (platform choice) | strict | `LUPDATE` (`asg=`) | The editor picks each stop's platform by path search over the engine's stop list at the click; under lockstep that list lacks a click still on its way, so the platform came out against the wrong predecessor. An update that came out of the editor's assignment pass carries `asg=<0/1>` and every instance re-runs the game's own assignment on the rebuilt list at the stamp (slice, `LINE PLATFORM ASSIGNMENT AT REPLAY`; the slice ships the tag only after checking its path context against the editor's once). Manual terminal picks, alternative terminals, stop settings and removals replay verbatim. Played 2026-09-20: the pass runs on every instance at the stamp and returns the click's platforms on plain double track, which is what vanilla does there too (the game's assignment is a shortest-loop search with no side-of-track preference; it moves a platform only where signals, one-way track or geometry force it). |
 | create | strict, from a spare | `LSPARE`, `LCREATE spare=` | Every player owns one empty SPARE line, created in lockstep (same step, same id everywhere) and owned by a hidden pool company, so no line list shows it. A click on New line is cancelled like any strict command, but the slice opens the line editor on the spare at once; at the stamp every instance re-owns, renames, recolours and re-keys that line to `origin:seq` and creates the player's next spare on the same step. Without a spare (one still in flight, or an older build) the editor's callback is held and rides on the replay at the stamp, as before. Why not create natively at the click: an entity allocated off-step shifts every id allocated after it on that game, and the worlds split (rig, 2026-09-12). |
-| edit stops | strict | `LUPDATE` | The new stop list is decoded off the command. If decoding fails the edit applies natively and peers read the line back. |
+| edit stops | strict | `LUPDATE` | The new stop list is decoded off the command, each stop's cargo filter (`stopConfig`: load, unload, maxLoad per cargo type) included (`sc=`, the stop record's `@` suffix). If decoding fails the edit applies natively and peers read the line back. |
 | delete | strict | `LDELETE` | |
 
 Stops are resolved by the station group's position (within 20 m) and the station's position
@@ -171,8 +171,6 @@ Stops are resolved by the station group's position (within 20 m) and the station
   detector lane, so a town that grows differently shows up. The Natural Town Growth Workshop
   script is wrapped so its clock and random numbers follow the simulation:
   [DETERMINISTIC_SCRIPTS.md](DETERMINISTIC_SCRIPTS.md).
-- A stop's load settings (`stopConfig`: unload only, maximum load) are not carried by a line
-  replay yet ([KNOWN_ISSUES.md](KNOWN_ISSUES.md#replication-gaps)).
 
 ## Detecting divergence
 

@@ -73,10 +73,16 @@ something here is fixed, the release note says so and the entry goes.
 
 - Not replicated: manual departure, "depart now" and maintenance targets;
   map editor and scenario commands. [REPLICATION.md](REPLICATION.md#not-replicated).
-- **A stop's load settings are not carried by line replays** *(from the code, 2026-09-20)*.
-  Each line stop has a `stopConfig` (unload only, maximum load) that the line decoder does not
-  read and the replay does not set, so a replayed line edit resets those settings on every
-  instance, the originator included.
+- **A stop's cargo filter is carried now, but not yet tested in a game** *(2026-09-26)*. Each
+  line stop's `stopConfig` (per cargo type: load, unload, maximum share of the capacity) used to
+  be dropped by the decoder and the replay, so a filter set in the line editor was reset on every
+  instance, the originator included. The slice now reads it (Windows: two MSVC `vector<bool>` at
+  stop+0x50/+0x70 and a float vector at +0x90; Linux: +0x50/+0x78/+0xa0) and ships it as
+  `sc=`; the Lua carries it as the stop record's `@load:unload:maxLoad` suffix and sets it at the
+  replay (`mp/stopconfig.lua`, `tools/line_stop_config_test.py`). The Windows offsets are derived
+  from the Linux layout and the 0xa8 stride, not measured: an unexpected shape is logged
+  (`cargo filter not read` in `tpf2_slice.log`) and that stop ships without its filter, as before.
+  First test: set a filter on one stop of a line with vehicles and check it on the other game.
 - **Replacing a stop on an occupied side is not strict**: the engine re-points the old stop's
   lines, which a script proposal cannot express, so the poll ships it after the fact and the
   originator re-ships every affected line.

@@ -49,6 +49,60 @@ static bool Wait(uintptr_t address, float* value)
     return SliceReadT(address, value) && !std::isnan(*value);
 }
 
+// libstdc++'s vector<bool>: {_M_start {word* p; unsigned off}, _M_finish {p; off},
+// word* end_of_storage}, 40 B, 64-bit words; bit k is bit k%64 of word k/64.
+static bool BitVec(uintptr_t at, std::string* out)
+{
+    uint64_t v[5];
+    out->clear();
+    if (!SliceRead(at, v, sizeof(v))) return false;
+    const uintptr_t sp = v[0], fp = v[2], eos = v[4];
+    const uint32_t so = (uint32_t)v[1], fo = (uint32_t)v[3];
+    if (so != 0 || fo >= 64 || fp < sp || eos < fp || (fp - sp) % 8) return false;
+    if (!sp) return fp == 0 && fo == 0;
+    const size_t n = (size_t)(fp - sp) * 8 + fo;
+    if (n > SliceSanityBytes) return false;
+    const size_t words = (n + 63) / 64;
+    std::vector<uint64_t> w(words);
+    if (words && !SliceRead(sp, w.data(), words * 8)) return false;
+    out->reserve(n);
+    for (size_t k = 0; k < n; ++k) out->push_back(((w[k / 64] >> (k % 64)) & 1) ? '1' : '0');
+    return true;
+}
+
+// Stop+0x50 stopConfig, the line editor's cargo filter (SLICE_LINES.md: two bit
+// vectors +0x50/+0x78, a vector +0xa0; API Line.StopConfig {load, unload, maxLoad}).
+// maxLoad is read as floats in 0..1. A shape that does not fit is logged and the
+// stop ships without its filter. Byte-for-byte the Windows slice's
+// "<load>:<unload>:<maxLoad>" (lines.inl ReadStopConfig).
+static bool StopConfig(uintptr_t s, std::string* cfg, size_t stop)
+{
+    std::string load, unload, mx;
+    SliceVec m;
+    const char* bad = nullptr;
+    if (!BitVec(s + 0x50, &load)) bad = "load";
+    else if (!BitVec(s + 0x78, &unload)) bad = "unload";
+    else if (!SliceReadStdVector(s + 0xa0, 4, SIZE_MAX, &m)) bad = "maxLoad";
+    if (bad) {
+        SliceLog("[slice-lines] stop %zu cargo filter not read (stopConfig.%s) -- shipped without it\n", stop, bad);
+        return false;
+    }
+    for (size_t k = 0; k < m.count; ++k) {
+        float v;
+        if (!SliceReadT(m.begin + k * 4, &v) || !(v >= 0.f && v <= 1.f) || (v != 0.f && v < 1e-30f)) {
+            SliceLog("[slice-lines] stop %zu cargo filter not read (maxLoad[%zu] not a fraction) -- shipped without it\n", stop, k + 1);
+            return false;
+        }
+        char num[32];
+        snprintf(num, sizeof(num), "%s%.9g", k ? "/" : "", v);
+        mx += num;
+    }
+    cfg->clear();
+    if (load.empty() && unload.empty() && mx.empty()) return true;
+    *cfg = load + ":" + unload + ":" + mx;
+    return true;
+}
+
 static bool DecodeBody(SliceRecord* rec, uintptr_t line)
 {
     float wait;
@@ -76,6 +130,14 @@ static bool DecodeBody(SliceRecord* rec, uintptr_t line)
         }
     }
     bool first = true;
+    for (size_t i = 0; i < stops.count; ++i) {
+        std::string cfg;
+        if (!StopConfig(stops.begin + i * 0xb8, &cfg, i + 1) || cfg.empty()) continue;
+        SliceRecordPrintf(rec, "%s%zu:%s", first ? " sc=" : ",", i + 1, cfg.c_str());
+        first = false;
+        if (rec->failed) return Refuse("record allocation", i + 1);
+    }
+    first = true;
     for (size_t i = 0; i < stops.count; ++i) {
         SliceVec points;
         if (!SliceReadStdVector(stops.begin + i * 0xb8 + 0x38, 8, SIZE_MAX, &points)) return Refuse("waypoints vector", i + 1);

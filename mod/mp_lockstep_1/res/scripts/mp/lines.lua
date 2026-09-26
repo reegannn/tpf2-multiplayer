@@ -8,6 +8,7 @@
 -- tools/luacheck.py's use-before-define checks look at column-0 declarations.
 return function(CM, K, log)
 require("mp.waypoints")(CM)
+require("mp.stopconfig")(CM)
 
 -- A wait time as the wire carries it: the engine's float, "inf" for the cargo
 -- slider's unlimited wait (string.format("%.9g", math.huge) prints inf and
@@ -215,7 +216,8 @@ function CM.stopsSigEqual(a, b)
 			local recs = {}
 			for rec in tostring(s or ""):gmatch("[^;]+") do
 				local f = {}
-				for v in rec:gmatch("[^,]+") do f[#f + 1] = tonumber(v) end
+				-- the numeric fields only: not the stop config ("@") or waypoint ("~") suffix
+				for v in (rec:match("^[^~@]*")):gmatch("[^,]+") do f[#f + 1] = tonumber(v) end
 				recs[#recs + 1] = f
 			end
 			return recs
@@ -263,7 +265,10 @@ function CM.lineSnapshot(lid)
 				if at then for a = 1, #at do al[#al + 1] = string.format("%d:%d", tonumber(at[a].station) or 0, tonumber(at[a].terminal) or 0) end end
 			end)
 			alts[#alts + 1] = table.concat(al, "/")
-			stops[#stops] = stops[#stops] .. CM.lineWaypointSuffix(s.waypoints)
+			-- the stop's cargo filter, then its waypoints (mp/stopconfig.lua)
+			local okC, cfg = pcall(CM.lineStopConfigSuffix, s)
+			if not okC then log(string.format("line %s: stop %d cargo filter not read (%s) -- shipped without it", tostring(lid), i, tostring(cfg))); cfg = "" end
+			stops[#stops] = stops[#stops] .. cfg .. CM.lineWaypointSuffix(s.waypoints)
 		end
 		local name = ""
 		pcall(function() name = game.interface.getName(lid) or "" end)
@@ -730,7 +735,7 @@ local function buildLineObject(c)
 	end
 	for rec in tostring(c.stops or ""):gmatch("[^;]+") do
 		local f = {}
-		for v in (rec:match("^[^~]+") or rec):gmatch("[^,]+") do f[#f + 1] = CM.waitNum(v) end
+		for v in (rec:match("^[^~@]+") or rec):gmatch("[^,]+") do f[#f + 1] = CM.waitNum(v) end
 		if #f < 7 then error("bad stop record " .. rec) end
 		local sg = findStationGroupNear(f[1], f[2])
 		if not sg then error(string.format("no station group within 20 m of %.1f,%.1f", f[1], f[2])) end
@@ -761,6 +766,8 @@ local function buildLineObject(c)
 		s.loadMode = f[5]
 		s.minWaitingTime = f[6]
 		s.maxWaitingTime = f[7]
+		local okC, errC = pcall(CM.lineApplyStopConfig, s, rec)
+		if not okC then log(string.format("line: stop %d cargo settings not applied: %s", #groups, tostring(errC))) end
 		local wp = CM.lineReadWaypoints(rec)
 		if #wp > 0 then
 			local target = s.waypoints

@@ -49,7 +49,9 @@ struct LineAlt  { int32_t station, terminal; };                   // StationTerm
 struct LineWp   { int32_t entity, index; };                        // transport::SignalId
 // waits are the engine's floats, any value it holds (the cargo-wait slider goes
 // past the 36000 s this once refused, natively on the host only -- 2026-09-16)
-struct LineStop { int32_t sg, station, terminal, loadMode; float minWait, maxWait; int nAlt; std::vector<LineAlt> alt; int nWp; std::vector<LineWp> wp; };
+// cfg: the stop's cargo filter (Line.StopConfig) as the wire's "<load>:<unload>:<maxLoad>",
+// empty for the default config -- see ReadStopConfig
+struct LineStop { int32_t sg, station, terminal, loadMode; float minWait, maxWait; int nAlt; std::vector<LineAlt> alt; int nWp; std::vector<LineWp> wp; std::string cfg; };
 static const uint64_t LINE_ANY_SPAN = ~0ull;   // ReadVec's cap, not used as one
 static char g_lineDecodeWhy[200] = "";
 #define LINE_REFUSE(...) do { _snprintf_s(g_lineDecodeWhy, sizeof(g_lineDecodeWhy), _TRUNCATE, __VA_ARGS__); return false; } while (0)
@@ -65,6 +67,77 @@ static void WriteLineWaypoints(FILE* f, const LineDecode& d)
                 d.st[i].wp[w].entity, d.st[i].wp[w].index);
         first = false;
     }
+}
+
+// " sc=<stop>:<load>:<unload>:<maxLoad>,..." for the stops whose cargo filter is
+// not the default (Lua: mp/stopconfig.lua CM.lineCaptureStopConfig)
+static void WriteLineStopConfig(FILE* f, const LineDecode& d)
+{
+    bool first = true;
+    for (int i = 0; i < d.n; i++) {
+        if (d.st[i].cfg.empty()) continue;
+        fprintf(f, "%s%d:%s", first ? " sc=" : ",", i + 1, d.st[i].cfg.c_str());
+        first = false;
+    }
+}
+
+// MSVC's vector<bool>: { vector<unsigned> words {begin,end,cap}; size_t bits; }, 32 B.
+// Bit k is bit k%32 of word k/32, and the word vector holds exactly ceil(bits/32)
+// words -- checked, so a wrong layout guess refuses instead of shipping noise.
+static bool ReadBitVec(const uint8_t* at, std::string* out, int stop, const char* what)
+{
+    uint64_t wb = 0, we = 0, wc = 0, n = 0;
+    memcpy(&wb, at, 8); memcpy(&we, at + 0x08, 8); memcpy(&wc, at + 0x10, 8); memcpy(&n, at + 0x18, 8);
+    out->clear();
+    if (we < wb || wc < we || (we - wb) != ((n + 31) / 32) * 4)
+        LINE_REFUSE("stop %d stopConfig.%s: words %llx..%llx cap %llx for %llu bits", stop, what,
+                    (unsigned long long)wb, (unsigned long long)we, (unsigned long long)wc, (unsigned long long)n);
+    if (n == 0) return true;
+    if (!Readable((void*)wb, (size_t)(we - wb))) LINE_REFUSE("stop %d stopConfig.%s unreadable", stop, what);
+    out->reserve((size_t)n);
+    for (uint64_t k = 0; k < n; k++) {
+        uint32_t word = 0;
+        memcpy(&word, (const uint8_t*)wb + (k / 32) * 4, 4);
+        out->push_back(((word >> (k % 32)) & 1) ? '1' : '0');
+    }
+    return true;
+}
+
+// Stop+0x50 stopConfig, the line editor's cargo filter: per cargo type, load and
+// unload (two vector<bool>) and maxLoad, the share of the capacity it may take
+// (API: Line.StopConfig {load, unload, maxLoad}; member pointer 0x50 PROVEN in
+// docs/re/linux/SLICE_LINES.md). On MSVC that is load @+0x50, unload @+0x70 and
+// maxLoad @+0x90..+0xa8, which ends the 0xa8 stop exactly. maxLoad is read as
+// floats in 0..1. These offsets are derived, not measured: a shape that does not
+// fit is logged and the stop ships WITHOUT its filter -- the edit stays strict,
+// as it was before the filter was read at all (the replay then resets it).
+// Not shipping it reset every filter on every instance at the replay.
+static bool ReadStopConfig(const uint8_t* b, std::string* cfg, int stop)
+{
+    std::string load, unload, mx;
+    if (!ReadBitVec(b + 0x50, &load, stop, "load")) return false;
+    if (!ReadBitVec(b + 0x70, &unload, stop, "unload")) return false;
+    uint64_t mb = 0, me = 0, mc = 0;
+    memcpy(&mb, b + 0x90, 8); memcpy(&me, b + 0x98, 8); memcpy(&mc, b + 0xa0, 8);
+    if (me < mb || mc < me || (me - mb) % 4)
+        LINE_REFUSE("stop %d stopConfig.maxLoad %llx..%llx cap %llx", stop,
+                    (unsigned long long)mb, (unsigned long long)me, (unsigned long long)mc);
+    const size_t nm = (size_t)((me - mb) / 4);
+    if (nm && !Readable((void*)mb, (size_t)(me - mb))) LINE_REFUSE("stop %d stopConfig.maxLoad unreadable", stop);
+    for (size_t k = 0; k < nm; k++) {
+        float v = 0.f;
+        memcpy(&v, (const uint8_t*)mb + k * 4, 4);
+        // a denormal is an integer read as a float: not this layout
+        if (!(v >= 0.f && v <= 1.f) || (v != 0.f && v < 1e-30f))
+            LINE_REFUSE("stop %d stopConfig.maxLoad[%d] = %g (raw %08x): not a fraction", stop, (int)k + 1, v, *(const uint32_t*)((const uint8_t*)mb + k * 4));
+        char num[32];
+        _snprintf_s(num, sizeof(num), _TRUNCATE, "%s%.9g", k ? "/" : "", v);
+        mx += num;
+    }
+    cfg->clear();
+    if (load.empty() && unload.empty() && mx.empty()) return true;
+    *cfg = load + ":" + unload + ":" + mx;
+    return true;
 }
 
 static bool DecodeLineAt(uint64_t line, uint64_t vecOff, LineDecode* out)
@@ -142,6 +215,11 @@ static bool DecodeLineAt(uint64_t line, uint64_t vecOff, LineDecode* out)
         for (int w = 0; w < t.nWp; w++) {
             memcpy(&t.wp[w], (void*)(wb + w * 8), 8);
             if (t.wp[w].entity <= 0 || t.wp[w].index < 0) LINE_REFUSE("stop %d waypoint %d: entity=%d index=%d", i + 1, w + 1, t.wp[w].entity, t.wp[w].index);
+        }
+        if (!ReadStopConfig(b, &t.cfg, i + 1)) {
+            Log("[slice] line decode: stop %d cargo filter not read (%s) -- shipped without it\n", i + 1, g_lineDecodeWhy);
+            g_lineDecodeWhy[0] = 0;
+            t.cfg.clear();
         }
     }
     return true;
