@@ -12,7 +12,9 @@ checks:
   - a decoded LUPDATE from the slice (" sc=<stop>:<cfg>,...") puts the same
     suffix on the right stop, before its waypoints (" wp=");
   - execLine's replay sets the config on the api.type.Line.Stop it builds, the
-    flags as BOOLEANS (a vector<bool>: a Lua 0 would convert to true);
+    flags as the INTEGERS 1 and 0. The stub's vectors refuse anything else the way
+    the game does ("stack index 3, expected number, received boolean: not an
+    integer": booleans dropped every filter in the first game test, 2026-09-26);
   - the waypoint and numeric fields still read the same with a config present;
   - a filter change is a re-set of the same stop to mergeLineEdit, and the
     stops signature (LCREATE matching) ignores the suffix;
@@ -57,19 +59,36 @@ local groupStations = { [5000] = {5001}, [6000] = {6001} }
 local lineStops = {
   { stationGroup = 5000, station = 0, terminal = 0, loadMode = 0,
     minWaitingTime = 0, maxWaitingTime = 180, waypoints = {}, alternativeTerminals = {},
-    stopConfig = { load = { true, false, true }, unload = { false, true, false },
+    stopConfig = { load = { 1, 0, 1 }, unload = { 0, 1, 0 },
                    maxLoad = { 1, 1, 0.5 } } },
   { stationGroup = 6000, station = 0, terminal = 1, loadMode = 0,
     minWaitingTime = 0, maxWaitingTime = 180, waypoints = {}, alternativeTerminals = {},
     stopConfig = { load = {}, unload = {}, maxLoad = {} } },
 }
+-- a StopConfig vector as the game binds it: the flags take integers only, maxLoad
+-- any number; read back by index and #, never ipairs (a userdata container)
+local function engineVec(flags)
+  local store = {}
+  return setmetatable({}, {
+    __index = function(_, k) return store[k] end,
+    __newindex = function(_, k, v)
+      if type(v) ~= "number" or (flags and v % 1 ~= 0) then
+        error("stack index 3, expected number, received " .. type(v) .. (flags and ": not an integer" or ""))
+      end
+      if type(k) ~= "number" or k < 1 or k > #store + 1 then error("index out of range: " .. tostring(k)) end
+      store[k] = v
+    end,
+    __len = function() return #store end,
+  })
+end
 local CT = { LINE = 1, STATION_GROUP = 4, PLAYER_OWNED = 5, COLOR = 6, MODEL_INSTANCE_LIST = 7, SIGNAL_LIST = 8 }
 api = setmetatable({}, { __index = function() return sink() end })
 api.type = setmetatable({
   ComponentType = CT,
   Line = { new = function() return { stops = {} } end,
            Stop = { new = function() return { waypoints = {}, alternativeTerminals = {},
-                                              stopConfig = { load = {}, unload = {}, maxLoad = {} } } end } },
+                                              stopConfig = { load = engineVec(true), unload = engineVec(true),
+                                                             maxLoad = engineVec(false) } } end } },
   StationTerminal = { new = function() return {} end },
   SignalId = { new = function() return {} end },
 }, { __index = function() return sink() end })
@@ -135,7 +154,8 @@ local function sentStop(i) local c = sent[1]; return c and c.line and c.line.sto
 function H.sentVec(i, field)
   local s = sentStop(i); if not s or not s.stopConfig then return nil end
   local out = {}
-  for k, v in ipairs(s.stopConfig[field]) do out[k] = type(v) .. ":" .. tostring(v) end
+  local vec = s.stopConfig[field]
+  for k = 1, #vec do out[k] = type(vec[k]) .. ":" .. tostring(vec[k]) end
   return table.concat(out, ",")
 end
 function H.sentWaypoint(i) local s = sentStop(i); return s and s.waypoints[1] and s.waypoints[1].entity end
@@ -170,9 +190,9 @@ def main():
     # 2. Replayed, the config reaches the Stop the command is built from.
     H.replay(stops)
     check("replay: one updateLine sent", H.nsent() == 1)
-    check("replay: stop 1 load flags, as booleans", H.sentVec(1, "load") == "boolean:true,boolean:false,boolean:true",
+    check("replay: stop 1 load flags, as integers", H.sentVec(1, "load") == "number:1,number:0,number:1",
           str(H.sentVec(1, "load")))
-    check("replay: stop 1 unload flags, as booleans", H.sentVec(1, "unload") == "boolean:false,boolean:true,boolean:false",
+    check("replay: stop 1 unload flags, as integers", H.sentVec(1, "unload") == "number:0,number:1,number:0",
           str(H.sentVec(1, "unload")))
     check("replay: stop 1 maxLoad", H.sentVec(1, "maxLoad") == "number:1,number:1,number:0.5",
           str(H.sentVec(1, "maxLoad")))
@@ -182,6 +202,16 @@ def main():
           H.sentField(2, "terminal") == 1 and H.sentField(1, "maxWaitingTime") == 180,
           f"{H.sentField(2, 'terminal')} {H.sentField(1, 'maxWaitingTime')}")
     check("replay: nothing refused", "not applied" not in H.logs() and "REJECT" not in H.logs(), H.logs()[-400:])
+
+    # 2b. The filter from the first game test, exactly as the slice read it (17 cargo
+    # types; load and unload set, maxLoad left empty by the game).
+    real_load, real_unload = "11111111101111000", "11111111101101000"
+    real = f"100.00,200.00,0,4,0,0,180,101.5,202.5@{real_load}:{real_unload}:;" + recs[1]
+    H.replay(real)
+    want = lambda bits: ",".join("number:" + b for b in bits)
+    check("replay, the game's own filter: all 17 load flags", H.sentVec(1, "load") == want(real_load), str(H.sentVec(1, "load")))
+    check("replay, the game's own filter: all 17 unload flags", H.sentVec(1, "unload") == want(real_unload), str(H.sentVec(1, "unload")))
+    check("replay, the game's own filter: maxLoad stays empty", H.sentVec(1, "maxLoad") == "", str(H.sentVec(1, "maxLoad")))
 
     # 3. The slice's decoded LUPDATE: sc= goes onto the right stop, before the waypoints.
     base = "100.00,200.00,0,0,0,0,180,101.5,202.5;400.00,500.00,0,1,0,0,180,401.5,502.5"

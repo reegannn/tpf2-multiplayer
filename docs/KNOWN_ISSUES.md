@@ -83,7 +83,12 @@ something here is fixed, the release note says so and the entry goes.
   from the Linux layout and the 0xa8 stride, not measured: an unexpected shape is logged
   (`cargo filter not read` in `tpf2_slice.log`) and that stop ships without its filter, as before.
   First test: set a filter on one stop of a line with vehicles and check it on the other game.
-  *2026-09-26, first game test:* ticking several cargo types quickly (or while paused) kept only
+  *2026-09-26, first game test, from the players' logs:* the slice read the filter
+  (`sc=1:11111111101111000::` in `lockstep_inject_a.txt`, 17 cargo types) and the mod shipped
+  it, but every replay dropped it: the Lua wrote the flags as booleans and the engine's setter
+  takes integers only (`cargo settings not applied: ... expected number, received boolean: not
+  an integer` in stdout). The flags are written as 1/0 now, and the tests' stand-in vectors
+  refuse booleans the same way. Also found in the first test: ticking several cargo types quickly (or while paused) kept only
   the last tick. Each tick is its own line edit built from the line the engine holds, and the
   quick-edit merge took a stop whole; it now merges a stop part by part and a filter entry by
   entry (`tools/line_stop_config_clicks_test.py`). Like every edit, a filter shows only once

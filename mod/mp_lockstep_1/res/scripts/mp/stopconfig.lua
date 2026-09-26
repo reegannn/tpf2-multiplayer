@@ -56,7 +56,7 @@ return function(CM)
         end
     end
 
-    -- { load = {bool...}, unload = {bool...}, maxLoad = {number...} } of a wire
+    -- { load = {1|0...}, unload = {1|0...}, maxLoad = {number...} } of a wire
     -- record, or nil when it carries none
     function CM.lineReadStopConfig(record)
         local head = tostring(record):match("^[^~]*")
@@ -65,8 +65,8 @@ return function(CM)
         if not valid(enc) then error("Invalid stop config " .. enc) end
         local l, u, m = enc:match("^([01]*):([01]*):([^:]*)$")
         local cfg = { load = {}, unload = {}, maxLoad = {} }
-        for c in l:gmatch("[01]") do cfg.load[#cfg.load + 1] = (c == "1") end
-        for c in u:gmatch("[01]") do cfg.unload[#cfg.unload + 1] = (c == "1") end
+        for c in l:gmatch("[01]") do cfg.load[#cfg.load + 1] = (c == "1") and 1 or 0 end
+        for c in u:gmatch("[01]") do cfg.unload[#cfg.unload + 1] = (c == "1") and 1 or 0 end
         for v in m:gmatch("[^/]+") do cfg.maxLoad[#cfg.maxLoad + 1] = CM.waitNum(v) end
         return cfg
     end
@@ -179,8 +179,11 @@ return function(CM)
         return n
     end
 
-    -- set a new api.type.Line.Stop's config from its wire record. Booleans, not
-    -- 0/1: the flags are a vector<bool>, and a Lua 0 converts to true.
+    -- set a new api.type.Line.Stop's config from its wire record. The flags go in
+    -- as the integers 1 and 0, as the API documents them ({int,...}), although the
+    -- engine keeps them as bits: its setter refuses anything but an integer, a
+    -- boolean included ("stack index 3, expected number, received boolean: not an
+    -- integer", 2026-09-26 in a game -- every filter was dropped at the replay).
     function CM.lineApplyStopConfig(stop, record)
         local cfg = CM.lineReadStopConfig(record)
         if not cfg then return false end
