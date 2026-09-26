@@ -88,7 +88,7 @@ end
 -- nothing. Only a Lua list assigned to the field is taken. How the engine converts
 -- that list is not known, so it runs both ways (BINDING): "numbers" takes 1/0,
 -- "truthy" converts like a C++ bool, where every number, 0 included, is true.
-BINDING = "numbers"
+CRASHED = 0
 local function engineConfig()
   local bits = { load = {}, unload = {} }
   local maxLoad = engineVec(false)
@@ -107,15 +107,13 @@ local function engineConfig()
         local t = engineVec(false); for i = 1, #v do t[i] = v[i] end; maxLoad = t; return
       end
       if not bits[k] then error("no field " .. tostring(k)) end
-      local out = {}
       if not getmetatable(v) then
-        for i = 1, #v do
-          if BINDING == "truthy" then out[i] = v[i] and 1 or 0
-          elseif type(v[i]) == "number" then out[i] = (v[i] ~= 0) and 1 or 0
-          else error("stack index 3, expected number, received " .. type(v[i]) .. ": not an integer") end
-        end
+        -- the game: its setter reads a Lua list as its own type through a null pointer
+        -- (build 7, access violation at exe+0x154ea2c). Fatal there, fatal here.
+        CRASHED = (CRASHED or 0) + 1
+        error("SIMULATED GAME CRASH: a Lua list assigned to stopConfig." .. k)
       end
-      bits[k] = out   -- a copy handed back sets nothing: the field comes out empty
+      bits[k] = {}   -- a copy handed back sets nothing: the field comes out empty
     end,
   })
 end
@@ -210,7 +208,7 @@ function H.merge(b, c, p)
 end
 function H.sigEqual(a, b) return CM.stopsSigEqual(a, b) end
 function H.logs() return table.concat(logs, "\n") end
-function H.setBinding(b) BINDING = b end
+function H.crashes() return CRASHED end
 return H
 ''')
 
@@ -228,9 +226,9 @@ def main():
     # 2. Replayed, the config reaches the Stop the command is built from.
     H.replay(stops)
     check("replay: one updateLine sent", H.nsent() == 1)
-    check("replay: stop 1 load flags, as integers", H.sentVec(1, "load") == "number:1,number:0,number:1",
+    check("replay: the script cannot write the flags (the game's copy) -- stop 1 load stays empty", H.sentVec(1, "load") == "",
           str(H.sentVec(1, "load")))
-    check("replay: stop 1 unload flags, as integers", H.sentVec(1, "unload") == "number:0,number:1,number:0",
+    check("replay: ... and unload stays empty", H.sentVec(1, "unload") == "",
           str(H.sentVec(1, "unload")))
     check("replay: stop 1 maxLoad", H.sentVec(1, "maxLoad") == "number:1,number:1,number:0.5",
           str(H.sentVec(1, "maxLoad")))
@@ -239,17 +237,8 @@ def main():
     check("replay: the numeric fields still read (terminal, maxWaitingTime)",
           H.sentField(2, "terminal") == 1 and H.sentField(1, "maxWaitingTime") == 180,
           f"{H.sentField(2, 'terminal')} {H.sentField(1, 'maxWaitingTime')}")
-    check("replay: nothing refused", "not applied" not in H.logs() and "REJECT" not in H.logs(), H.logs()[-400:])
-
-    # 2a. The game's binding, both ways it may convert a list: the ticks come out right.
-    for binding in ("numbers", "truthy"):
-        H.setBinding(binding)
-        H.replay(stops)
-        check(f"binding '{binding}': load ticks written exactly", H.sentVec(1, "load") == "number:1,number:0,number:1", str(H.sentVec(1, "load")))
-        check(f"binding '{binding}': unload ticks written exactly", H.sentVec(1, "unload") == "number:0,number:1,number:0", str(H.sentVec(1, "unload")))
-        check(f"binding '{binding}': maxLoad written exactly", H.sentVec(1, "maxLoad") == "number:1,number:1,number:0.5", str(H.sentVec(1, "maxLoad")))
-    check("the log says how each list was written", "written load as a list of" in H.logs(), H.logs()[-300:])
-    H.setBinding("numbers")
+    check("replay: the unwritable flags are logged, never hidden", "not written: load (did not read back), unload (did not read back)" in H.logs(), H.logs()[-400:])
+    check("replay: NO Lua list is ever assigned to a flag field (the game crashes on it)", H.crashes() == 0, str(H.crashes()))
 
     # 2b. The filter from the first game test, exactly as the slice read it (17 cargo
     # types; load and unload set, maxLoad left empty by the game).
@@ -257,8 +246,7 @@ def main():
     real = f"100.00,200.00,0,4,0,0,180,101.5,202.5@{real_load}:{real_unload}:;" + recs[1]
     H.replay(real)
     want = lambda bits: ",".join("number:" + b for b in bits)
-    check("replay, the game's own filter: all 17 load flags", H.sentVec(1, "load") == want(real_load), str(H.sentVec(1, "load")))
-    check("replay, the game's own filter: all 17 unload flags", H.sentVec(1, "unload") == want(real_unload), str(H.sentVec(1, "unload")))
+    check("replay, the game's own filter: no crash", H.crashes() == 0, str(H.crashes()))
     check("replay, the game's own filter: maxLoad stays empty", H.sentVec(1, "maxLoad") == "", str(H.sentVec(1, "maxLoad")))
 
     # 3. The slice's decoded LUPDATE: sc= goes onto the right stop, before the waypoints.

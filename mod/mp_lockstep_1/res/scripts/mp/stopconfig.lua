@@ -206,41 +206,23 @@ return function(CM)
             end)
             return ok and same
         end
-        -- HOW a vector is written is checked, not assumed (2026-09-26, in a game):
-        -- writing maxLoad's entries in place kept them, but the same writes to load
-        -- and unload were silently lost -- the engine keeps those as bits, and the
-        -- script gets a copy of them. So each way is tried in turn and read back; the
-        -- first that reads back as the filter is kept. Every game runs the same
-        -- binding, so every game settles on the same way.
+        -- In place, and checked by reading back. NEVER assign a Lua list to one of
+        -- these fields: the engine's setter takes it unchecked, as its own type, and
+        -- reads through a null pointer -- the game died on it (2026-09-26, build 7,
+        -- access violation reading 0 at exe+0x154ea2c the moment a filter replayed).
+        -- In place, maxLoad is kept; load and unload are bits in the engine and the
+        -- script is handed a copy of them, so their entries are lost. That is logged
+        -- ("not written"): the flags have no safe route from the script.
         local how, failed = {}, {}
         local function set(field, vals, isFlag)
             if #vals == 0 then return end   -- none shipped: the new stop's default stays
-            local tries = {
-                { "in place", function()
-                    local vec = sc[field]
-                    for i, v in ipairs(vals) do vec[i] = v end
-                    sc[field] = vec
-                end },
-                { "as a list of numbers", function()
-                    local t = {}
-                    for i, v in ipairs(vals) do t[i] = v end
-                    sc[field] = t
-                end },
-            }
-            if isFlag then
-                tries[#tries + 1] = { "as a list of booleans", function()
-                    local t = {}
-                    for i, v in ipairs(vals) do t[i] = (v ~= 0) end
-                    sc[field] = t
-                end }
-            end
-            local tried = {}
-            for _, t in ipairs(tries) do
-                local ok, err = pcall(t[2])
-                if ok and holds(field, vals, isFlag) then how[#how + 1] = field .. " " .. t[1]; return end
-                tried[#tried + 1] = t[1] .. (ok and " (did not read back)" or (": " .. tostring(err)))
-            end
-            failed[#failed + 1] = field .. " (" .. table.concat(tried, "; ") .. ")"
+            local ok, err = pcall(function()
+                local vec = sc[field]
+                for i, v in ipairs(vals) do vec[i] = v end
+                sc[field] = vec
+            end)
+            if ok and holds(field, vals, isFlag) then how[#how + 1] = field .. " in place"; return end
+            failed[#failed + 1] = field .. (ok and " (did not read back)" or (" (" .. tostring(err) .. ")"))
         end
         set("load", cfg.load, true)
         set("unload", cfg.unload, true)
