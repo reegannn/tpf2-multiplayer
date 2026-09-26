@@ -89,10 +89,15 @@ static bool WriteInjectVehicleCmd(int fid, uint64_t r8, uint64_t r9, uint64_t st
             WriteLineWaypoints(f, d);
             if (g_lineAsgTag >= 0) fprintf(f, " asg=%d", g_lineAsgTag);
             fprintf(f, "\n");
-            if (d.n > 0)
-                Log("[slice] LUPDATE shipped DECODED: line=%d wait=%g stops=%d (first: sg=%d st=%d term=%d lm=%d wait=%g..%g)\n",
+            if (d.n > 0) {
+                int nCfg = 0, firstCfg = -1;
+                for (int i = 0; i < d.n; i++) if (!d.st[i].cfg.empty()) { if (firstCfg < 0) firstCfg = i; nCfg++; }
+                Log("[slice] LUPDATE shipped DECODED: line=%d wait=%g stops=%d (first: sg=%d st=%d term=%d lm=%d wait=%g..%g) cargo filter on %d stop(s)%s%.*s%s\n",
                     (int)(int32_t)r8, d.wait, d.n, d.st[0].sg, d.st[0].station, d.st[0].terminal,
-                    d.st[0].loadMode, d.st[0].minWait, d.st[0].maxWait);
+                    d.st[0].loadMode, d.st[0].minWait, d.st[0].maxWait, nCfg,
+                    firstCfg >= 0 ? " (first: " : "", firstCfg >= 0 ? 200 : 0,
+                    firstCfg >= 0 ? d.st[firstCfg].cfg.c_str() : "", firstCfg >= 0 ? ")" : "");
+            }
             else
                 Log("[slice] LUPDATE shipped DECODED: line=%d wait=%g stops=0 (last stop removed)\n",
                     (int)(int32_t)r8, d.wait);

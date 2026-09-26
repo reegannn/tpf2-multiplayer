@@ -107,8 +107,9 @@ static bool ReadBitVec(const uint8_t* at, std::string* out, int stop, const char
 // unload (two vector<bool>) and maxLoad, the share of the capacity it may take
 // (API: Line.StopConfig {load, unload, maxLoad}; member pointer 0x50 PROVEN in
 // docs/re/linux/SLICE_LINES.md). On MSVC that is load @+0x50, unload @+0x70 and
-// maxLoad @+0x90..+0xa8, which ends the 0xa8 stop exactly. maxLoad is read as
-// floats in 0..1. These offsets are derived, not measured: a shape that does not
+// maxLoad @+0x90..+0xa8, which ends the 0xa8 stop exactly. maxLoad's element type
+// is recognised, not assumed (stopconfig_format.h). These offsets are derived, not
+// measured: a shape that does not
 // fit is logged and the stop ships WITHOUT its filter -- the edit stays strict,
 // as it was before the filter was read at all (the replay then resets it).
 // Not shipping it reset every filter on every instance at the replay.
@@ -122,18 +123,10 @@ static bool ReadStopConfig(const uint8_t* b, std::string* cfg, int stop)
     if (me < mb || mc < me || (me - mb) % 4)
         LINE_REFUSE("stop %d stopConfig.maxLoad %llx..%llx cap %llx", stop,
                     (unsigned long long)mb, (unsigned long long)me, (unsigned long long)mc);
-    const size_t nm = (size_t)((me - mb) / 4);
-    if (nm && !Readable((void*)mb, (size_t)(me - mb))) LINE_REFUSE("stop %d stopConfig.maxLoad unreadable", stop);
-    for (size_t k = 0; k < nm; k++) {
-        float v = 0.f;
-        memcpy(&v, (const uint8_t*)mb + k * 4, 4);
-        // a denormal is an integer read as a float: not this layout
-        if (!(v >= 0.f && v <= 1.f) || (v != 0.f && v < 1e-30f))
-            LINE_REFUSE("stop %d stopConfig.maxLoad[%d] = %g (raw %08x): not a fraction", stop, (int)k + 1, v, *(const uint32_t*)((const uint8_t*)mb + k * 4));
-        char num[32];
-        _snprintf_s(num, sizeof(num), _TRUNCATE, "%s%.9g", k ? "/" : "", v);
-        mx += num;
-    }
+    if (me > mb && !Readable((void*)mb, (size_t)(me - mb))) LINE_REFUSE("stop %d stopConfig.maxLoad unreadable", stop);
+    char why[160] = "";
+    if (!StopConfigFormatMaxLoad((const uint8_t*)mb, (size_t)(me - mb), load.size(), &mx, why, sizeof(why)))
+        LINE_REFUSE("stop %d stopConfig.%s", stop, why);
     cfg->clear();
     if (load.empty() && unload.empty() && mx.empty()) return true;
     *cfg = load + ":" + unload + ":" + mx;

@@ -83,6 +83,15 @@ something here is fixed, the release note says so and the entry goes.
   from the Linux layout and the 0xa8 stride, not measured: an unexpected shape is logged
   (`cargo filter not read` in `tpf2_slice.log`) and that stop ships without its filter, as before.
   First test: set a filter on one stop of a line with vehicles and check it on the other game.
+  *2026-09-26, first game test:* ticking several cargo types quickly (or while paused) kept only
+  the last tick. Each tick is its own line edit built from the line the engine holds, and the
+  quick-edit merge took a stop whole; it now merges a stop part by part and a filter entry by
+  entry (`tools/line_stop_config_clicks_test.py`). Like every edit, a filter shows only once
+  its stamp is reached, so nothing changes on screen while the session is paused. The slice
+  now also recognises `maxLoad` stored as floats, integers or doubles (`stopconfig_format.h`),
+  and both logs say what was carried: `cargo filter on N stop(s)` in `tpf2_slice.log`, and
+  `LUPDATE: ... decoded ... cargo filter on N stop(s)` and `line: stop N cargo filter set` in
+  the game log.
 - **Replacing a stop on an occupied side is not strict**: the engine re-points the old stop's
   lines, which a script proposal cannot express, so the poll ships it after the fact and the
   originator re-ships every affected line.

@@ -345,7 +345,9 @@ function CM.mergeLineEdit(baseS, baseA, clickS, clickA, pendS, pendA)
 		if i <= nb and j <= nc and stopKey(B[i]) == stopKey(C[j]) then
 			if B[i] ~= C[j] or BA[i] ~= CA[j] then
 				local k = find(stopKey(B[i]))
-				if k then P[k], PA[k] = C[j], CA[j]; sets = sets + 1 end
+				-- only what the click changed replaces the pending stop's part: a second
+				-- tick in the cargo dialog must not undo the first (mp/stopconfig.lua)
+				if k then P[k], PA[k] = CM.mergeStopRecord(B[i], C[j], P[k], BA[i], CA[j], PA[k]); sets = sets + 1 end
 			end
 			i, j = i + 1, j + 1
 		elseif j <= nc and (i > nb or L[i][j + 1] >= L[i + 1][j]) then
@@ -381,6 +383,34 @@ local function lineDistance(aS, bS)
 	return na + nb - 2 * L[1][1]
 end
 CM.lineDistance = lineDistance
+
+-- How many cargo filter entries differ between the stops two lists share (paired as
+-- in lineDistance). A tick in the cargo dialog changes one entry, so the list a tick
+-- was built from is one away, and a list the tick's predecessor already reached is
+-- two: without this every list with the same stops was "0 away" and a tick built
+-- from a stale editor took the entity's list as its base and undid the tick before.
+local function lineCfgDistance(aS, bS)
+	local na, nb = lineCount(aS), lineCount(bS)
+	local A, B = lineSplit(aS, na), lineSplit(bS, nb)
+	local L = {}
+	for i = na + 1, 1, -1 do
+		L[i] = {}
+		for j = nb + 1, 1, -1 do
+			if i > na or j > nb then L[i][j] = 0
+			elseif stopKey(A[i]) == stopKey(B[j]) then L[i][j] = L[i + 1][j + 1] + 1
+			else L[i][j] = math.max(L[i + 1][j], L[i][j + 1]) end
+		end
+	end
+	local i, j, d = 1, 1, 0
+	while i <= na and j <= nb do
+		if stopKey(A[i]) == stopKey(B[j]) then
+			d = d + CM.stopConfigDistance(A[i], B[j])
+			i, j = i + 1, j + 1
+		elseif L[i + 1][j] >= L[i][j + 1] then i = i + 1
+		else j = j + 1 end
+	end
+	return d
+end
 
 -- THE LIST A CLICK WAS BUILT FROM (2026-09-12). The line editor builds each click
 -- from the list IT last saw, and an update can land between the click and the
@@ -434,7 +464,7 @@ function CM.lineBaseFor(key, clickS, snap)
 	for k = #h, 1, -1 do cands[#cands + 1] = h[k] end
 	local best, bestD
 	for _, cand in ipairs(cands) do
-		local d = lineDistance(cand.stops, clickS)
+		local d = lineDistance(cand.stops, clickS) + lineCfgDistance(cand.stops, clickS)
 		if d <= 1 then return cand end
 		if not bestD or d < bestD then best, bestD = cand, d end
 	end
@@ -767,7 +797,8 @@ local function buildLineObject(c)
 		s.minWaitingTime = f[6]
 		s.maxWaitingTime = f[7]
 		local okC, errC = pcall(CM.lineApplyStopConfig, s, rec)
-		if not okC then log(string.format("line: stop %d cargo settings not applied: %s", #groups, tostring(errC))) end
+		if not okC then log(string.format("line: stop %d cargo settings not applied: %s", #groups, tostring(errC)))
+		elseif errC then log(string.format("line: stop %d cargo filter set (%s)", #groups, tostring(select(2, CM.splitStopRecord(rec))))) end
 		local wp = CM.lineReadWaypoints(rec)
 		if #wp > 0 then
 			local target = s.waypoints

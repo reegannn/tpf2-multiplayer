@@ -59,6 +59,7 @@
 #include <vector>
 #include "hook.h"
 #include "datadir.h"
+#include "stopconfig_format.h"   // a line stop's maxLoad as the wire's numbers (slice/lines.inl)
 
 // ---------------------------------------------------------------------------
 // GAME BUILD GUARD. Every RVA below was measured on ONE build of

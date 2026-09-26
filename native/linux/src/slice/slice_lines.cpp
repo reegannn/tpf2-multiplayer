@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include "../plugin/preview_game_guard.h"
+#include "stopconfig_format.h"
 
 namespace slice_lines {
 constexpr uintptr_t kSet = 0x15ed550, kCreate = 0x15efda0, kUpdate = 0x15f0050;
@@ -72,9 +73,9 @@ static bool BitVec(uintptr_t at, std::string* out)
 
 // Stop+0x50 stopConfig, the line editor's cargo filter (SLICE_LINES.md: two bit
 // vectors +0x50/+0x78, a vector +0xa0; API Line.StopConfig {load, unload, maxLoad}).
-// maxLoad is read as floats in 0..1. A shape that does not fit is logged and the
-// stop ships without its filter. Byte-for-byte the Windows slice's
-// "<load>:<unload>:<maxLoad>" (lines.inl ReadStopConfig).
+// maxLoad's element type is recognised, not assumed (stopconfig_format.h). A shape
+// that does not fit is logged and the stop ships without its filter. Byte-for-byte
+// the Windows slice's "<load>:<unload>:<maxLoad>" (lines.inl ReadStopConfig).
 static bool StopConfig(uintptr_t s, std::string* cfg, size_t stop)
 {
     std::string load, unload, mx;
@@ -82,20 +83,17 @@ static bool StopConfig(uintptr_t s, std::string* cfg, size_t stop)
     const char* bad = nullptr;
     if (!BitVec(s + 0x50, &load)) bad = "load";
     else if (!BitVec(s + 0x78, &unload)) bad = "unload";
-    else if (!SliceReadStdVector(s + 0xa0, 4, SIZE_MAX, &m)) bad = "maxLoad";
+    else if (!SliceReadStdVector(s + 0xa0, 1, SIZE_MAX, &m)) bad = "maxLoad";
     if (bad) {
         SliceLog("[slice-lines] stop %zu cargo filter not read (stopConfig.%s) -- shipped without it\n", stop, bad);
         return false;
     }
-    for (size_t k = 0; k < m.count; ++k) {
-        float v;
-        if (!SliceReadT(m.begin + k * 4, &v) || !(v >= 0.f && v <= 1.f) || (v != 0.f && v < 1e-30f)) {
-            SliceLog("[slice-lines] stop %zu cargo filter not read (maxLoad[%zu] not a fraction) -- shipped without it\n", stop, k + 1);
-            return false;
-        }
-        char num[32];
-        snprintf(num, sizeof(num), "%s%.9g", k ? "/" : "", v);
-        mx += num;
+    std::vector<uint8_t> bytes(m.count);
+    char why[160] = "";
+    if ((m.count && !SliceRead(m.begin, bytes.data(), m.count))
+        || !StopConfigFormatMaxLoad(bytes.data(), m.count, load.size(), &mx, why, sizeof(why))) {
+        SliceLog("[slice-lines] stop %zu cargo filter not read (stopConfig.%s) -- shipped without it\n", stop, why[0] ? why : "maxLoad unreadable");
+        return false;
     }
     cfg->clear();
     if (load.empty() && unload.empty() && mx.empty()) return true;

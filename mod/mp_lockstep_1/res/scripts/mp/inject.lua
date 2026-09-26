@@ -1497,7 +1497,8 @@ function CM.pollInject()
 							-- a line no vehicle runs: applied here now, everyone else at the stamp
 							-- (lines.lua CM.lineApplyNow); armed 0 = "ran natively here" to execLine
 							local free = armed == 1 and (K.LINE_EDIT_FREE or 1) == 1 and CM.lineHasVehicles and not CM.lineHasVehicles(lid)
-							log(string.format("LUPDATE: %s decoded, %d stop(s), wait %g%s", lk, #stops, wait,
+							log(string.format("LUPDATE: %s decoded, %d stop(s), wait %g, cargo filter on %d stop(s) (%s)%s", lk, #stops, wait,
+								tonumber(CM.lineStopConfigCount and CM.lineStopConfigCount(newStops)) or 0, line:match(" sc=") and "the slice read it" or "none shipped by the slice",
 								free and " (no vehicles: applied here now, the others at the stamp)" or (armed == 1 and " (strict)" or "")))
 							CM.scheduleLocal("LUPDATE", { key = lk, name = snap.name or "", color = snap.color or "0.9,0.2,0.2",
 							                           wait = wait, stops = newStops,

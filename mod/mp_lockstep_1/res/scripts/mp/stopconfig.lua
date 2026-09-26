@@ -71,6 +71,114 @@ return function(CM)
         return cfg
     end
 
+    -- ---------- quick edits: merging a click onto the edit still on its way ----------
+    -- Each tick in the stop's cargo dialog is its own UpdateLine, built by the editor
+    -- from the line as the ENGINE holds it. Under lockstep the previous tick has not
+    -- landed yet (or the session is paused), so the next one arrives without it, and
+    -- the merge used to take the click's whole record: every tick but the last was
+    -- undone (2026-09-26: "only gears" came back as every cargo). The merge now goes
+    -- part by part, and a cargo filter entry by entry: only what the click changed
+    -- against its base replaces what the pending edit holds.
+
+    -- the parts of a stop record: the numeric fields, the filter (without its "@", ""
+    -- for none) and the waypoint suffix (with its "~", "" for none)
+    function CM.splitStopRecord(rec)
+        local pre, wp = tostring(rec or ""):match("^([^~]*)(.*)$")
+        local head, cfg = pre:match("^([^@]*)@?(.*)$")
+        return head, cfg, wp
+    end
+
+    local function cfgParts(cfg)
+        local l, u, m = tostring(cfg or ""):match("^([01]*):([01]*):([^:]*)$")
+        local L, U, M = {}, {}, {}
+        if l then
+            for c in l:gmatch("[01]") do L[#L + 1] = c end
+            for c in u:gmatch("[01]") do U[#U + 1] = c end
+            for v in m:gmatch("[^/]+") do M[#M + 1] = v end
+        end
+        return { L, U, M }
+    end
+    -- the value an entry past the end of a vector stands for: what the other
+    -- vector holds there most often (the editor fills a default stop's empty
+    -- vectors with one value per cargo type), else the game's default ("1": load,
+    -- unload, full capacity). Deterministic: a tie is the default, and so is a tail
+    -- of fewer than 3 entries, where "most often" says nothing.
+    local function tailFill(vec, from, dflt)
+        if #vec - from + 1 < 3 then return dflt end
+        local n, best, bestN, tie = {}, nil, 0, false
+        for i = from, #vec do
+            local v = vec[i]
+            n[v] = (n[v] or 0) + 1
+            if n[v] > bestN then best, bestN, tie = v, n[v], false
+            elseif n[v] == bestN and v ~= best then tie = true end
+        end
+        if not best or tie then return dflt end
+        return best
+    end
+    local function mergeVec(B, C, P)
+        if #C == 0 then return (#B == 0) and P or C end   -- the click emptied it: take that
+        local n = math.max(#B, #C, #P)
+        local fill = tailFill(C, #B + 1, "1")
+        local out = {}
+        for i = 1, n do
+            local b = B[i] or fill
+            local c = C[i] or b
+            if c ~= b then out[i] = c else out[i] = P[i] or b end
+        end
+        return out
+    end
+    local function joinCfg(parts)
+        local L, U, M = parts[1], parts[2], parts[3]
+        if #L == 0 and #U == 0 and #M == 0 then return "" end
+        return table.concat(L) .. ":" .. table.concat(U) .. ":" .. table.concat(M, "/")
+    end
+    -- base / click / pending filters ("" = none) -> the merged filter
+    function CM.mergeStopConfig(b, c, p)
+        if c == b then return p end
+        if p == b then return c end
+        local B, C, P = cfgParts(b), cfgParts(c), cfgParts(p)
+        return joinCfg({ mergeVec(B[1], C[1], P[1]), mergeVec(B[2], C[2], P[2]), mergeVec(B[3], C[3], P[3]) })
+    end
+    -- one stop re-set by a click: base, click and pending records and platform
+    -- lists -> the merged record and platforms
+    function CM.mergeStopRecord(bRec, cRec, pRec, bAlt, cAlt, pAlt)
+        local bh, bc, bw = CM.splitStopRecord(bRec)
+        local ch, cc, cw = CM.splitStopRecord(cRec)
+        local ph, pc, pw = CM.splitStopRecord(pRec)
+        local head = (ch ~= bh) and ch or ph
+        local cfg = CM.mergeStopConfig(bc, cc, pc)
+        local wp = (cw ~= bw) and cw or pw
+        local alt = (cAlt ~= bAlt) and cAlt or pAlt
+        return head .. (cfg ~= "" and ("@" .. cfg) or "") .. wp, alt
+    end
+    -- how many filter entries differ between two records' filters (lineBaseFor:
+    -- a tick changes one, so the list it was built from is one away)
+    function CM.stopConfigDistance(aRec, bRec)
+        local _, ac = CM.splitStopRecord(aRec)
+        local _, bc = CM.splitStopRecord(bRec)
+        if ac == bc then return 0 end
+        local A, B = cfgParts(ac), cfgParts(bc)
+        local d = 0
+        for k = 1, 3 do
+            local x, y = A[k], B[k]
+            if #x < #y then x, y = y, x end   -- x the longer; y's missing entries stand for x's tail fill
+            local fill = tailFill(x, #y + 1, "1")
+            for i = 1, #x do
+                if (y[i] or fill) ~= x[i] then d = d + 1 end
+            end
+        end
+        return d
+    end
+    -- how many stops of a list carry a filter (for the logs)
+    function CM.lineStopConfigCount(stops)
+        local n = 0
+        for rec in tostring(stops or ""):gmatch("[^;]+") do
+            local _, cfg = CM.splitStopRecord(rec)
+            if cfg ~= "" then n = n + 1 end
+        end
+        return n
+    end
+
     -- set a new api.type.Line.Stop's config from its wire record. Booleans, not
     -- 0/1: the flags are a vector<bool>, and a Lua 0 converts to true.
     function CM.lineApplyStopConfig(stop, record)
