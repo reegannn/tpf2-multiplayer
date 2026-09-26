@@ -846,13 +846,6 @@ local function buildLineObject(c)
 		lineObj.stops[n] = s
 		local tok = CM.lineFlagsToken and CM.lineFlagsToken(n, rec)
 		if tok then flags[#flags + 1] = tok end
-		-- DIAGNOSTIC (2026-09-26: a filter set here did not stick): what the Line
-		-- the command is built from holds for this stop, read back through the API
-		if okC and errC then
-			local okR, held = pcall(function() return CM.lineStopConfigSuffix(lineObj.stops[n]) end)
-			log(string.format("line: stop %d cargo filter in the command's Line: %s", n,
-				okR and (held ~= "" and held or "(none -- the setting was lost)") or ("unreadable: " .. tostring(held))))
-		end
 	end
 	return lineObj, n, groups, flags
 end
