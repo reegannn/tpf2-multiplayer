@@ -697,7 +697,18 @@ CM.boot("mp.pacing")
 -- Lives in res/scripts/mp/cursors.lua.
 CM.boot("mp.cursors")
 CM.boot("mp.previews")
-require("mp/fences_compat").bind(CM, K, log)
+-- Snowball Fences compatibility: guarded like CM.boot (a failure switches the mod
+-- off, never the game's own load). Its own name, with the slash: mod.lua requires
+-- the same module table by it.
+if not CM.bootFailed then
+	local okF, fences = pcall(require, "mp/fences_compat")
+	if not okF or type(fences) ~= "table" or type(fences.bind) ~= "function" then
+		CM.bootFail("Transport Fever 2 Multiplayer: require('mp/fences_compat') failed: " .. CM.bootText(okF and ("returned a " .. type(fences)) or fences))
+	else
+		local okB, errB = pcall(fences.bind, CM, K, log)
+		if not okB then CM.bootFail("Transport Fever 2 Multiplayer: module mp/fences_compat failed while loading: " .. CM.bootText(errB)) end
+	end
+end
 -- ---------- the Multiplayer window's stats section, in words (GUI state) ----------
 -- Lives in res/scripts/mp/stats.lua.
 CM.boot("mp.stats")
